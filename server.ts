@@ -45,7 +45,8 @@ async function startServer() {
 
   const rateLimiterMiddleware = (req: any, res: any, next: any) => {
     // Use X-Forwarded-For if behind proxy (like Vercel), else socket address
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    const forwarded = req.headers['x-forwarded-for'];
+    const ip = (Array.isArray(forwarded) ? forwarded[0] : forwarded) || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
     
     let record = rateLimit.get(ip as string);

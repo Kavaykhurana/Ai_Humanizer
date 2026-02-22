@@ -72,20 +72,16 @@ export default function App() {
   }, []);
 
   const testApiKey = async (keyToTest: string) => {
-    // 1. Instant Client-Side Validation
-    if (!keyToTest.startsWith('AIza')) {
-      setKeyStatus('invalid');
-      // We'll rely on the UI helper text to explain why
-      return false;
-    }
-
+    // 1. Client-Side Validation (Warning only, do not block)
+    // We allow non-AIza keys to proceed to backend verification to avoid false negatives
+    
     setIsTestingKey(true);
     setKeyStatus('idle');
     
     try {
       // 2. Network Test with Timeout
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
 
       // Test via backend to avoid CORS/Referrer issues
       const response = await fetch('/api/verify', {
@@ -343,12 +339,12 @@ export default function App() {
               {/* Helper text for key format */}
               <div className="mb-4 px-1">
                 {tempApiKey && !tempApiKey.startsWith('AIza') && (
-                  <p className="text-xs text-red-600 mb-2 flex items-center gap-1 font-medium">
-                    <X className="w-3 h-3" />
-                    Invalid Format: API Keys must start with "AIza".
+                  <p className="text-xs text-amber-600 mb-2 flex items-center gap-1">
+                    <Info className="w-3 h-3" />
+                    Warning: Gemini API keys usually start with "AIza".
                   </p>
                 )}
-                {keyStatus === 'invalid' && tempApiKey.startsWith('AIza') && (
+                {keyStatus === 'invalid' && (
                   <p className="text-xs text-red-500">
                     Connection failed. Please check your key and permissions.
                   </p>
