@@ -38,7 +38,32 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Simple in-memory rate limiter
+  const rateLimit = new Map<string, { count: number, lastReset: number }>();
+  const WINDOW_MS = 60 * 1000; // 1 minute
+  const MAX_REQUESTS = 20; // 20 requests per minute per IP
+
+  const rateLimiterMiddleware = (req: any, res: any, next: any) => {
+    // Use X-Forwarded-For if behind proxy (like Vercel), else socket address
+    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    
+    let record = rateLimit.get(ip as string);
+    if (!record || (now - record.lastReset > WINDOW_MS)) {
+      record = { count: 0, lastReset: now };
+    }
+    
+    if (record.count >= MAX_REQUESTS) {
+      return res.status(429).json({ error: "Too many requests. Please try again later." });
+    }
+    
+    record.count++;
+    rateLimit.set(ip as string, record);
+    next();
+  };
+
   app.use(express.json());
+  app.use('/api/', rateLimiterMiddleware); // Apply to all API routes
 
   // API Route for verifying text
   app.post("/api/verify", async (req, res) => {
