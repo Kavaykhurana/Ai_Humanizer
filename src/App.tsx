@@ -61,6 +61,9 @@ export default function App() {
   const [showInfoModal, setShowInfoModal] = useState(false);
   const [tempApiKey, setTempApiKey] = useState('');
 
+  const [isTestingKey, setIsTestingKey] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
+
   useEffect(() => {
     const storedKey = localStorage.getItem('gemini_api_key');
     if (storedKey) {
@@ -68,12 +71,48 @@ export default function App() {
     }
   }, []);
 
-  const saveApiKey = () => {
+  const testApiKey = async (keyToTest: string) => {
+    setIsTestingKey(true);
+    setKeyStatus('idle');
+    try {
+      // Test via backend to avoid CORS/Referrer issues
+      const response = await fetch('/api/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: keyToTest }),
+      });
+
+      if (response.ok) {
+        setKeyStatus('valid');
+        return true;
+      } else {
+        setKeyStatus('invalid');
+        return false;
+      }
+    } catch (e) {
+      console.error("Key test failed", e);
+      setKeyStatus('invalid');
+      return false;
+    } finally {
+      setIsTestingKey(false);
+    }
+  };
+
+  const saveApiKey = async () => {
     if (tempApiKey.trim()) {
+      // Optional: auto-test before saving if they haven't tested yet
+      if (keyStatus === 'idle') {
+         const isValid = await testApiKey(tempApiKey.trim());
+         if (!isValid) return; // Don't save if invalid
+      }
+      
+      if (keyStatus === 'invalid') return;
+
       setApiKey(tempApiKey.trim());
       localStorage.setItem('gemini_api_key', tempApiKey.trim());
       setShowApiKeyModal(false);
       setTempApiKey('');
+      setKeyStatus('idle');
     }
   };
 
@@ -81,6 +120,7 @@ export default function App() {
     setApiKey('');
     localStorage.removeItem('gemini_api_key');
     setShowApiKeyModal(false);
+    setKeyStatus('idle');
   };
 
   const handleRewrite = async () => {
@@ -88,66 +128,42 @@ export default function App() {
 
     // Use user provided key if available, otherwise fallback to env var (for preview)
     // In production/Vercel, if user hasn't provided a key, we prompt them.
-    const effectiveKey = apiKey || process.env.GEMINI_API_KEY;
+    // const effectiveKey = apiKey || process.env.GEMINI_API_KEY;
 
-    if (!effectiveKey) {
-      setShowApiKeyModal(true);
-      return;
-    }
+    // if (!effectiveKey) {
+    //   setShowApiKeyModal(true);
+    //   return;
+    // }
 
     setIsLoading(true);
     setError(null);
     setOutputText('');
 
     try {
-      const ai = new GoogleGenAI({ apiKey: effectiveKey });
-      
-      try {
-        const result = await ai.models.generateContent({
-          model: "gemini-3.1-pro-preview",
-          contents: [{ role: "user", parts: [{ text: inputText }] }],
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-            temperature: 1.1, // Slightly higher for more "creative" variance
-            topP: 0.98,
-            topK: 100, // Allow deeper reach into vocabulary
-          },
-        });
+      const response = await fetch('/api/rewrite', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          text: inputText,
+          apiKey: apiKey // Optional: send user key if provided
+        }),
+      });
 
-        const responseText = result.text;
-        if (responseText) {
-          setOutputText(responseText);
-        }
-      } catch (proError: any) {
-        // Check if it's a quota/rate limit error
-        const isQuotaError = proError.status === 429 || 
-                             proError.message?.includes('429') || 
-                             proError.message?.includes('RESOURCE_EXHAUSTED') ||
-                             proError.error?.code === 429 ||
-                             proError.error?.status === 'RESOURCE_EXHAUSTED' ||
-                             JSON.stringify(proError).includes('RESOURCE_EXHAUSTED');
+      const data = await response.json();
 
-        if (isQuotaError) {
-          console.warn("Pro model quota exceeded, falling back to Flash model.");
-          // Fallback to Flash model
-          const result = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: [{ role: "user", parts: [{ text: inputText }] }],
-            config: {
-              systemInstruction: SYSTEM_INSTRUCTION,
-              temperature: 1.0,
-              topP: 0.95,
-              topK: 64,
-            },
-          });
-          
-          const responseText = result.text;
-          if (responseText) {
-            setOutputText(responseText);
-          }
-        } else {
-          throw proError; // Re-throw if it's not a quota error
+      if (!response.ok) {
+        // If server says key is missing (401), prompt user
+        if (response.status === 401) {
+          setShowApiKeyModal(true);
+          throw new Error("Please provide an API Key to continue.");
         }
+        throw new Error(data.error || 'Failed to rewrite text');
+      }
+
+      if (data.text) {
+        setOutputText(data.text);
       }
     } catch (err: any) {
       console.error("Error:", err);
@@ -155,15 +171,11 @@ export default function App() {
       let errorMessage = "Failed to rewrite text. Please try again.";
       
       // Check for specific error types
-      if (err.status === 429 || 
-          err.message?.includes('429') || 
-          err.message?.includes('RESOURCE_EXHAUSTED') ||
-          err.error?.code === 429 ||
-          err.error?.status === 'RESOURCE_EXHAUSTED' ||
-          JSON.stringify(err).includes('RESOURCE_EXHAUSTED')) {
+      if (err.message?.includes('429') || 
+          err.message?.includes('RESOURCE_EXHAUSTED')) {
         errorMessage = "You have exceeded your API quota. Please check your plan or wait a moment.";
-      } else if (err.message?.includes('API key') || err.status === 403) {
-        errorMessage = "Invalid API Key. Please check your key settings.";
+      } else if (err.message?.includes('API Key') || err.message?.includes('403')) {
+        errorMessage = "Invalid API Key or Access Denied. Please check your key settings.";
         // Only clear if it was a user-provided key that failed
         if (apiKey) {
              setApiKey(''); 
@@ -286,13 +298,39 @@ export default function App() {
                 To use this application securely on your own device, please provide your Gemini API key. 
                 Google offers a generous <strong>free tier</strong> for personal use. Your key is stored locally in your browser and is never sent to our servers.
               </p>
-              <input
-                type="password"
-                value={tempApiKey}
-                onChange={(e) => setTempApiKey(e.target.value)}
-                placeholder="Enter your Gemini API Key"
-                className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl mb-4 focus:outline-none focus:ring-2 focus:ring-[#1A1A1A]/10 font-mono text-sm"
-              />
+              <div className="bg-yellow-50 border border-yellow-100 rounded-lg p-3 mb-4">
+                <p className="text-xs text-yellow-800 leading-relaxed">
+                  <strong>Important:</strong> If you see "Invalid API Key" errors, ensure your key has <strong>no IP or Referrer restrictions</strong> in Google Cloud Console, or explicitly allow this domain.
+                </p>
+              </div>
+              <div className="relative">
+                <input
+                  type="password"
+                  value={tempApiKey}
+                  onChange={(e) => {
+                    setTempApiKey(e.target.value);
+                    setKeyStatus('idle');
+                  }}
+                  placeholder="Enter your Gemini API Key"
+                  className={`w-full p-3 bg-gray-50 border rounded-xl mb-4 focus:outline-none focus:ring-2 font-mono text-sm pr-10 transition-all
+                    ${keyStatus === 'invalid' ? 'border-red-300 focus:ring-red-200' : 
+                      keyStatus === 'valid' ? 'border-green-300 focus:ring-green-200' : 
+                      'border-gray-200 focus:ring-[#1A1A1A]/10'}`}
+                />
+                {keyStatus === 'valid' && (
+                  <Check className="absolute right-3 top-3.5 w-4 h-4 text-green-500" />
+                )}
+                {keyStatus === 'invalid' && (
+                  <X className="absolute right-3 top-3.5 w-4 h-4 text-red-500" />
+                )}
+              </div>
+
+              {keyStatus === 'invalid' && (
+                <p className="text-xs text-red-500 mb-4 -mt-2">
+                  Connection failed. Please check your key and permissions.
+                </p>
+              )}
+
               <div className="flex gap-3 justify-end">
                 {apiKey && (
                   <button
@@ -303,8 +341,15 @@ export default function App() {
                   </button>
                 )}
                 <button
+                  onClick={() => testApiKey(tempApiKey.trim())}
+                  disabled={!tempApiKey.trim() || isTestingKey}
+                  className="px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {isTestingKey ? 'Testing...' : 'Test Connection'}
+                </button>
+                <button
                   onClick={saveApiKey}
-                  disabled={!tempApiKey.trim()}
+                  disabled={!tempApiKey.trim() || isTestingKey}
                   className="px-4 py-2 text-sm font-medium bg-[#1A1A1A] text-white rounded-lg hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                   Save Key
