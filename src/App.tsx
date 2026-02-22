@@ -72,15 +72,30 @@ export default function App() {
   }, []);
 
   const testApiKey = async (keyToTest: string) => {
+    // 1. Instant Client-Side Validation
+    if (!keyToTest.startsWith('AIza')) {
+      setKeyStatus('invalid');
+      // We'll rely on the UI helper text to explain why
+      return false;
+    }
+
     setIsTestingKey(true);
     setKeyStatus('idle');
+    
     try {
+      // 2. Network Test with Timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8 second timeout
+
       // Test via backend to avoid CORS/Referrer issues
       const response = await fetch('/api/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ apiKey: keyToTest }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (response.ok) {
         setKeyStatus('valid');
@@ -311,8 +326,8 @@ export default function App() {
                     setTempApiKey(e.target.value);
                     setKeyStatus('idle');
                   }}
-                  placeholder="Enter your Gemini API Key"
-                  className={`w-full p-3 bg-gray-50 border rounded-xl mb-4 focus:outline-none focus:ring-2 font-mono text-sm pr-10 transition-all
+                  placeholder="Enter your Gemini API Key (starts with AIza...)"
+                  className={`w-full p-3 bg-gray-50 border rounded-xl mb-1 focus:outline-none focus:ring-2 font-mono text-sm pr-10 transition-all
                     ${keyStatus === 'invalid' ? 'border-red-300 focus:ring-red-200' : 
                       keyStatus === 'valid' ? 'border-green-300 focus:ring-green-200' : 
                       'border-gray-200 focus:ring-[#1A1A1A]/10'}`}
@@ -324,12 +339,21 @@ export default function App() {
                   <X className="absolute right-3 top-3.5 w-4 h-4 text-red-500" />
                 )}
               </div>
-
-              {keyStatus === 'invalid' && (
-                <p className="text-xs text-red-500 mb-4 -mt-2">
-                  Connection failed. Please check your key and permissions.
-                </p>
-              )}
+              
+              {/* Helper text for key format */}
+              <div className="mb-4 px-1">
+                {tempApiKey && !tempApiKey.startsWith('AIza') && (
+                  <p className="text-xs text-red-600 mb-2 flex items-center gap-1 font-medium">
+                    <X className="w-3 h-3" />
+                    Invalid Format: API Keys must start with "AIza".
+                  </p>
+                )}
+                {keyStatus === 'invalid' && tempApiKey.startsWith('AIza') && (
+                  <p className="text-xs text-red-500">
+                    Connection failed. Please check your key and permissions.
+                  </p>
+                )}
+              </div>
 
               <div className="flex gap-3 justify-end">
                 {apiKey && (
